@@ -1,6 +1,11 @@
 package it.github.bot;
 
 import io.github.cdimascio.dotenv.Dotenv;
+import it.github.bot.exception.NewsServiceException;
+import it.github.bot.interfaces.NewsService;
+import it.github.bot.service.NewsApiService;
+import it.github.bot.service.NewsCategory;
+import it.github.bot.service.NewsItem;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
@@ -23,33 +28,16 @@ public class NewsSummarizerBot extends TelegramLongPollingBot {
     private static final String CATEGORY_TECH = "Notizie Tech";
     private static final String CATEGORY_FINANCE = "Notizie Finanza";
     private static final String CATEGORY_RANDOM = "Notizia Casuale";
-    private static final Dotenv dotEnv = Dotenv.configure().load();
-
-
-    private static final String[] RANDOM_NEWS = {
-            "Gli scienziati hanno scoperto un nuovo pianeta abitabile a soli 40 anni luce dalla Terra.",
-            "Un'importante azienda tecnologica ha annunciato una rivoluzionaria batteria che dura una settimana.",
-            "Un nuovo studio dimostra che dormire 8 ore a notte può ridurre il rischio di malattie cardiache del 30%.",
-            "Un team italiano ha vinto il campionato mondiale di robotica con un robot in grado di risolvere problemi complessi.",
-            "Una startup ha creato un sistema che può convertire la plastica in carburante con un'efficienza del 90%."
-    };
-
-    private static final String POLITICS_NEWS = "Ecco le ultime notizie di politica:\n\n" +
-            "- Il governo ha approvato un nuovo piano per le infrastrutture\n" +
-            "- Incontro al vertice tra i leader dei principali partiti\n" +
-            "- Nuove misure fiscali in discussione al parlamento";
-
-    private static final String TECH_NEWS = "Ecco le ultime notizie tecnologiche:\n\n" +
-            "- Apple ha presentato il nuovo iPhone\n" +
-            "- Meta annuncia progressi significativi nell'IA generativa\n" +
-            "- Breakthrough nella tecnologia delle batterie a stato solido";
-
-    private static final String FINANCE_NEWS = "Ecco le ultime notizie finanziarie:\n\n" +
-            "- La borsa ha registrato un aumento del 2% questa settimana\n" +
-            "- La BCE mantiene i tassi di interesse invariati\n" +
-            "- Bitcoin supera quota 60.000 dollari";
-
     private static final String DEFAULT_RESPONSE = "Non ho capito. Ecco i comandi disponibili:";
+
+    private final Dotenv dotEnv;
+    private final Random random;
+    private final NewsService newsService;
+    public NewsSummarizerBot() {
+        this.dotEnv = Dotenv.configure().load();
+        this.random = new Random();
+        this.newsService = new NewsApiService(dotEnv.get("NEWS_API_KEY"));
+    }
 
     public static void main(String[] args) throws TelegramApiException {
         try {
@@ -83,18 +71,24 @@ public class NewsSummarizerBot extends TelegramLongPollingBot {
         Long chatId = message.getChatId();
         String messageText = message.getText();
 
-        if (COMMAND_START.equals(messageText)) {
-            sendWelcomeMessage(chatId, message.getFrom().getFirstName());
-        } else if (messageText.contains(CATEGORY_POLITICS)) {
-            sendText(chatId, POLITICS_NEWS);
-        } else if (messageText.contains(CATEGORY_TECH)) {
-            sendText(chatId, TECH_NEWS);
-        } else if (messageText.contains(CATEGORY_FINANCE)) {
-            sendText(chatId, FINANCE_NEWS);
-        } else if (messageText.contains(CATEGORY_RANDOM)) {
-            sendRandomNews(chatId);
-        } else {
-            sendKeyboard(chatId, DEFAULT_RESPONSE);
+        try {
+            if (COMMAND_START.equals(messageText)) {
+                sendWelcomeMessage(chatId, message.getFrom().getFirstName());
+            } else if (messageText.contains(CATEGORY_POLITICS)) {
+                sendCategoryNews(chatId, NewsCategory.POLITICA);
+            } else if (messageText.contains(CATEGORY_TECH)) {
+                sendCategoryNews(chatId, NewsCategory.TECHNOLOGY);
+            } else if (messageText.contains(CATEGORY_FINANCE)) {
+                sendCategoryNews(chatId, NewsCategory.BUSINESS);
+            } else if (messageText.contains(CATEGORY_RANDOM)) {
+                sendRandomNews(chatId);
+            } else {
+                sendKeyboard(chatId, DEFAULT_RESPONSE);
+            }
+        } catch (NewsServiceException e) {
+            sendText(chatId, "Mi dispiace, c'è stato un problema nel recuperare le notizie. Riprova più tardi.");
+            System.err.println("Errore nel servizio notizie: " + e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -102,14 +96,16 @@ public class NewsSummarizerBot extends TelegramLongPollingBot {
         return update.hasMessage() && update.getMessage().hasText();
     }
     private void sendWelcomeMessage(Long chatId, String firstName) {
-        String welcomeText = String.format(
-                "Ciao %s! 👋\n\n" +
-                        "Benvenuto nel News Summarizer Bot. Questo bot ti permette di ricevere aggiornamenti sulle ultime notizie in diverse categorie.\n\n" +
-                        "Come funziona:\n" +
-                        "- Usa i bottoni qui sotto per selezionare la categoria di notizie che ti interessa\n" +
-                        "- Riceverai un sommario delle ultime notizie in quella categoria\n" +
-                        "- Con 'Notizia Casuale' riceverai una notizia selezionata casualmente\n\n" +
-                        "Seleziona una categoria per iniziare:", firstName);
+
+        String welcomeText = String.format("""
+            Ciao %s! 👋
+                    Benvenuto nel News Summarizer Bot. Questo bot ti permette di ricevere aggiornamenti sulle ultime notizie in diverse categorie.
+                    Come funziona:
+                    - Usa i bottoni qui sotto per selezionare la categoria di notizie che ti interessa
+                    - Riceverai un sommario delle ultime notizie in quella categoria
+                    - Con 'Notizia Casuale' riceverai una notizia selezionata casualmente
+                    Seleziona una categoria per iniziare:
+                     """, firstName);
 
         sendKeyboard(chatId, welcomeText);
     }
@@ -149,10 +145,58 @@ public class NewsSummarizerBot extends TelegramLongPollingBot {
         keyboardMarkup.setKeyboard(keyboard);
         return keyboardMarkup;
     }
-    private void sendRandomNews(Long chatId) {
-        Random random = new Random();
-        int index = random.nextInt(RANDOM_NEWS.length);
-        sendText(chatId, "📰 Notizia casuale:\n\n" + RANDOM_NEWS[index]);
+    private void sendCategoryNews(Long chatId, NewsCategory category) throws NewsServiceException {
+        int newsLimitForMessage = 3;
+        List<NewsItem> news = newsService.getNewsByCategory(category, newsLimitForMessage);
+        String formattedNews = formatNewsItems(news, getCategoryDisplayName(category));
+        sendText(chatId, formattedNews);
+    }
+    private String getCategoryDisplayName(NewsCategory category) {
+        switch (category) {
+            case POLITICA:
+                return "politica";
+            case TECHNOLOGY:
+                return "tecnologia";
+            case BUSINESS:
+                return "finanza";
+            default:
+                return "generali";
+        }
+    }
+    private String formatNewsItems(List<NewsItem> news, String category) {
+        StringBuilder builder = new StringBuilder();
+        builder.append(String.format("Ecco le ultime notizie di %s:\n\n", category));
+
+        for (NewsItem item : news) {
+            builder.append("- ")
+                    .append(item.getTitle())
+                    .append("\n");
+
+            if (item.getDescription() != null && !item.getDescription().isEmpty()) {
+                builder.append("  ")
+                        .append(item.getDescription())
+                        .append("\n");
+            }
+
+            builder.append("\n");
+        }
+
+        return builder.toString();
+    }
+    private void sendRandomNews(Long chatId) throws NewsServiceException {
+        List<NewsItem> news = newsService.getRandomNews(1);
+        if (!news.isEmpty()) {
+            NewsItem randomNews = news.get(0);
+            String formattedNews = String.format(
+                    """
+                    📰 Notizia casuale: %s %s""",
+                    randomNews.getTitle(),
+                    randomNews.getDescription() != null ? randomNews.getDescription() : ""
+            );
+            sendText(chatId, formattedNews);
+        } else {
+            sendText(chatId, "Mi dispiace, non sono riuscito a trovare notizie casuali al momento.");
+        }
     }
 
 
@@ -173,6 +217,4 @@ public class NewsSummarizerBot extends TelegramLongPollingBot {
                 .text(text)
                 .build();
     }
-
-
 }
