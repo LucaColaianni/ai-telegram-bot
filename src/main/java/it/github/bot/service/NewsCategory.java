@@ -4,4 +4,5 @@ public enum NewsCategory {
     POLITICA,
     TECHNOLOGY,
     BUSINESS,
+    RANDOM
 }

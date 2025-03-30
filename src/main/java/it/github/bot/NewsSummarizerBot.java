@@ -6,6 +6,7 @@ import it.github.bot.interfaces.NewsService;
 import it.github.bot.service.NewsApiService;
 import it.github.bot.service.NewsCategory;
 import it.github.bot.service.NewsItem;
+import lombok.extern.slf4j.Slf4j;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.TelegramBotsApi;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
@@ -21,21 +22,20 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+@Slf4j
 public class NewsSummarizerBot extends TelegramLongPollingBot {
 
     private static final String COMMAND_START = "/start";
-    private static final String CATEGORY_POLITICS = "Notizie Politiche";
+    private static final String CATEGORY_POLITICS = "Notiziae Politiche";
     private static final String CATEGORY_TECH = "Notizie Tech";
     private static final String CATEGORY_FINANCE = "Notizie Finanza";
     private static final String CATEGORY_RANDOM = "Notizia Casuale";
     private static final String DEFAULT_RESPONSE = "Non ho capito. Ecco i comandi disponibili:";
 
     private final Dotenv dotEnv;
-    private final Random random;
     private final NewsService newsService;
     public NewsSummarizerBot() {
         this.dotEnv = Dotenv.configure().load();
-        this.random = new Random();
         this.newsService = new NewsApiService(dotEnv.get("NEWS_API_KEY"));
     }
 
@@ -44,10 +44,10 @@ public class NewsSummarizerBot extends TelegramLongPollingBot {
             TelegramBotsApi botsApi = new TelegramBotsApi(DefaultBotSession.class);
             NewsSummarizerBot bot = new NewsSummarizerBot();
             botsApi.registerBot(bot);
-            System.out.println("Bot avviato con successo!");
+            log.info("Bot started successfully!");
         } catch (TelegramApiException e) {
             e.printStackTrace();
-            System.out.println("Errore durante l'avvio del bot: " + e.getMessage());
+            log.error("Error during bot startup: " + e.getMessage());
         }
     }
 
@@ -70,6 +70,7 @@ public class NewsSummarizerBot extends TelegramLongPollingBot {
         Message message = update.getMessage();
         Long chatId = message.getChatId();
         String messageText = message.getText();
+        log.info("New message received from [{}], chatId: [{}], text: " , message.getFrom(),chatId,messageText);
 
         try {
             if (COMMAND_START.equals(messageText)) {
@@ -81,13 +82,13 @@ public class NewsSummarizerBot extends TelegramLongPollingBot {
             } else if (messageText.contains(CATEGORY_FINANCE)) {
                 sendCategoryNews(chatId, NewsCategory.BUSINESS);
             } else if (messageText.contains(CATEGORY_RANDOM)) {
-                sendRandomNews(chatId);
+               sendCategoryNews(chatId,NewsCategory.RANDOM);
             } else {
                 sendKeyboard(chatId, DEFAULT_RESPONSE);
             }
         } catch (NewsServiceException e) {
             sendText(chatId, "Mi dispiace, c'è stato un problema nel recuperare le notizie. Riprova più tardi.");
-            System.err.println("Errore nel servizio notizie: " + e.getMessage());
+            log.error("Error in news service -> [{}]" ,e.getMessage());
             e.printStackTrace();
         }
     }
@@ -117,7 +118,7 @@ public class NewsSummarizerBot extends TelegramLongPollingBot {
         try {
             execute(message);
         } catch (TelegramApiException e) {
-            System.err.println("Errore nell'invio della tastiera: " + e.getMessage());
+            log.error("Error sending keyboard: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -148,9 +149,16 @@ public class NewsSummarizerBot extends TelegramLongPollingBot {
     private void sendCategoryNews(Long chatId, NewsCategory category) throws NewsServiceException {
         int newsLimitForMessage = 3;
         List<NewsItem> news = newsService.getNewsByCategory(category, newsLimitForMessage);
-        String formattedNews = formatNewsItems(news, getCategoryDisplayName(category));
-        sendText(chatId, formattedNews);
+        List<String> formattedNews = newsService.formatNewsItems(news, getCategoryDisplayName(category));
+        sendSingleTextNews(chatId, formattedNews);
     }
+
+    private void sendSingleTextNews(Long chatId , List<String> formattedNews) {
+        for(String singleMessage: formattedNews){
+            sendText(chatId, singleMessage);
+        }
+    }
+
     private String getCategoryDisplayName(NewsCategory category) {
         switch (category) {
             case POLITICA:
@@ -163,50 +171,14 @@ public class NewsSummarizerBot extends TelegramLongPollingBot {
                 return "generali";
         }
     }
-    private String formatNewsItems(List<NewsItem> news, String category) {
-        StringBuilder builder = new StringBuilder();
-        builder.append(String.format("Ecco le ultime notizie di %s:\n\n", category));
-
-        for (NewsItem item : news) {
-            builder.append("- ")
-                    .append(item.getTitle())
-                    .append("\n");
-
-            if (item.getDescription() != null && !item.getDescription().isEmpty()) {
-                builder.append("  ")
-                        .append(item.getDescription())
-                        .append("\n");
-            }
-
-            builder.append("\n");
-        }
-
-        return builder.toString();
-    }
-    private void sendRandomNews(Long chatId) throws NewsServiceException {
-        List<NewsItem> news = newsService.getRandomNews(1);
-        if (!news.isEmpty()) {
-            NewsItem randomNews = news.get(0);
-            String formattedNews = String.format(
-                    """
-                    📰 Notizia casuale: %s %s""",
-                    randomNews.getTitle(),
-                    randomNews.getDescription() != null ? randomNews.getDescription() : ""
-            );
-            sendText(chatId, formattedNews);
-        } else {
-            sendText(chatId, "Mi dispiace, non sono riuscito a trovare notizie casuali al momento.");
-        }
-    }
-
-
     private void sendText(Long chatId, String text) {
         SendMessage message = createBasicMessage(chatId, text);
+        log.info("Sending message -> [{}] at [{}]" , text, chatId);
 
         try {
             execute(message);
         } catch (TelegramApiException e) {
-            System.err.println("Errore nell'invio del messaggio: " + e.getMessage());
+            log.error("Error sending message: " + e.getMessage());
             e.printStackTrace();
         }
     }

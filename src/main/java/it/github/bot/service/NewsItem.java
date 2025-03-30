@@ -21,4 +21,12 @@ public class NewsItem {
     public String getDescription() {
         return description;
     }
+
+    public String getAuthor() {
+        return author;
+    }
+
+    public String getUrl() {
+        return url;
+    }
 }
